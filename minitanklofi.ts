@@ -1,15 +1,10 @@
 
 /**
- * Mini Tank LOFI
+ * Mini Tank LOFI Joystick
  * Calliope mini V2
  *
- * Motor links:
- * P0 = Richtung
- * P1 = Tempo
- *
- * Motor rechts:
- * P2 = Richtung
- * P3 = Tempo
+ * Links:  P0 Richtung, P1 Tempo
+ * Rechts: P2 Richtung, P3 Tempo
  */
 
 //% color="#0D47A1" icon="\uf1b9" block="Mini Tank LOFI"
@@ -50,13 +45,17 @@ namespace miniTankLofi {
     let ereignisse: number[] = []
     let funktionen: (() => void)[] = []
 
-    // Fahrzeiten in Millisekunden
+    // Pfeiltasten
     let fahrzeit = 150
     let drehzeit = 75
 
+    // Joystick
+    let totzone = 10
+    let joystickTimeout = 250
+    let joystickAktiv = false
+
     /**
-     * Interne Stoppfunktion.
-     * Kein sichtbarer MakeCode-Block.
+     * Interne Stoppfunktion
      */
     function stoppen(): void {
         pins.analogWritePin(AnalogPin.P1, 0)
@@ -65,8 +64,7 @@ namespace miniTankLofi {
     }
 
     /**
-     * Einen oder beide Motoren steuern.
-     * Tempo 0 bedeutet Motor aus.
+     * Motorsteuerung
      */
     //% blockId=mini_tank_lofi_motor
     //% block="Motor %motor Richtung %richtung Tempo %tempo"
@@ -79,13 +77,7 @@ namespace miniTankLofi {
         tempo: number
     ): void {
 
-        if (tempo < 0) {
-            tempo = 0
-        }
-
-        if (tempo > 700) {
-            tempo = 700
-        }
+        tempo = Math.constrain(tempo, 0, 700)
 
         let signal = richtung == Richtung.Vorwaerts ? 1 : 0
 
@@ -110,7 +102,112 @@ namespace miniTankLofi {
     }
 
     /**
-     * Bluetooth starten und LOFI-Befehle empfangen.
+     * Joystick-Motoren direkt steuern
+     */
+    function joystickMotoren(x: number, y: number): void {
+
+        x = Math.constrain(x, -100, 100)
+        y = Math.constrain(y, -100, 100)
+
+        if (Math.abs(x) <= totzone) {
+            x = 0
+        }
+
+        if (Math.abs(y) <= totzone) {
+            y = 0
+        }
+
+        if (x == 0 && y == 0) {
+            stoppen()
+            return
+        }
+
+        // Differenzialsteuerung
+        let links = y + x
+        let rechts = y - x
+
+        // Werte auf maximal 100 begrenzen
+        let maximum = Math.max(
+            100,
+            Math.max(Math.abs(links), Math.abs(rechts))
+        )
+
+        links = links * 100 / maximum
+        rechts = rechts * 100 / maximum
+
+        let tempoLinks = Math.round(Math.abs(links) * 7)
+        let tempoRechts = Math.round(Math.abs(rechts) * 7)
+
+        pins.analogWritePin(AnalogPin.P1, 0)
+        pins.analogWritePin(AnalogPin.P3, 0)
+
+        pins.digitalWritePin(
+            DigitalPin.P0,
+            links >= 0 ? 1 : 0
+        )
+
+        pins.digitalWritePin(
+            DigitalPin.P2,
+            rechts >= 0 ? 1 : 0
+        )
+
+        pins.analogWritePin(AnalogPin.P1, tempoLinks)
+        pins.analogWritePin(AnalogPin.P3, tempoRechts)
+
+        motorenAktiv = true
+    }
+
+    /**
+     * Joystick-Nachricht auswerten
+     * Beispiel: X+25,Y-40
+     */
+    function joystickAuswerten(text: string): boolean {
+
+        // Doppelte X am Anfang tolerieren
+        while (text.length > 0 && text.charAt(0) == "X") {
+            text = text.substr(1)
+        }
+
+        let komma = text.indexOf(",Y")
+
+        if (komma < 0) {
+            return false
+        }
+
+        let xText = text.substr(0, komma)
+        let yText = text.substr(komma + 2)
+
+        if (xText.length < 2 || yText.length < 2) {
+            return false
+        }
+
+        if (
+            (xText.charAt(0) != "+" &&
+             xText.charAt(0) != "-") ||
+            (yText.charAt(0) != "+" &&
+             yText.charAt(0) != "-")
+        ) {
+            return false
+        }
+
+        let x = parseFloat(xText)
+        let y = parseFloat(yText)
+
+        if (isNaN(x) || isNaN(y)) {
+            return false
+        }
+
+        joystickAktiv = true
+        aktuelleTaste = -1
+        letzteNachricht = input.runningTime()
+
+        joystickMotoren(x, y)
+
+        return true
+    }
+
+    /**
+     * Bluetooth starten
      */
     //% blockId=mini_tank_lofi_bluetooth
     //% block="LOFI Bluetooth starten"
@@ -128,6 +225,7 @@ namespace miniTankLofi {
 
         bluetooth.onBluetoothDisconnected(function () {
             stoppen()
+            joystickAktiv = false
         })
 
         control.inBackground(function () {
@@ -136,25 +234,29 @@ namespace miniTankLofi {
                 let befehl = bluetooth.uartReadUntil("\n")
                 befehl = befehl.trim()
 
-                let taste = -1
+                if (!joystickAuswerten(befehl)) {
 
-                if (befehl == "up") {
-                    taste = LofiTaste.Hoch
-                } else if (befehl == "down") {
-                    taste = LofiTaste.Runter
-                } else if (befehl == "left") {
-                    taste = LofiTaste.Links
-                } else if (befehl == "right") {
-                    taste = LofiTaste.Rechts
-                }
+                    let taste = -1
 
-                if (taste >= 0) {
-                    aktuelleTaste = taste
-                    letzteNachricht = input.runningTime()
+                    if (befehl == "up") {
+                        taste = LofiTaste.Hoch
+                    } else if (befehl == "down") {
+                        taste = LofiTaste.Runter
+                    } else if (befehl == "left") {
+                        taste = LofiTaste.Links
+                    } else if (befehl == "right") {
+                        taste = LofiTaste.Rechts
+                    }
 
-                    for (let i = 0; i < ereignisse.length; i++) {
-                        if (ereignisse[i] == taste) {
-                            funktionen[i]()
+                    if (taste >= 0) {
+                        joystickAktiv = false
+                        aktuelleTaste = taste
+                        letzteNachricht = input.runningTime()
+
+                        for (let i = 0; i < ereignisse.length; i++) {
+                            if (ereignisse[i] == taste) {
+                                funktionen[i]()
+                            }
                         }
                     }
                 }
@@ -171,7 +273,9 @@ namespace miniTankLofi {
 
                     let zeit = fahrzeit
 
-                    if (
+                    if (joystickAktiv) {
+                        zeit = joystickTimeout
+                    } else if (
                         aktuelleTaste == LofiTaste.Links ||
                         aktuelleTaste == LofiTaste.Rechts
                     ) {
@@ -191,7 +295,7 @@ namespace miniTankLofi {
     }
 
     /**
-     * Auf eine LOFI-Pfeiltaste reagieren.
+     * LOFI-Pfeiltasten
      */
     //% blockId=mini_tank_lofi_taste
     //% block="wenn LOFI-Taste %taste empfangen"
@@ -200,7 +304,6 @@ namespace miniTankLofi {
         taste: LofiTaste,
         handler: () => void
     ): void {
-
         ereignisse.push(taste)
         funktionen.push(handler)
     }
