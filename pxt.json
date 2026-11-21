@@ -1,14 +1,13 @@
-
 {
-    "name": "mini-tank-lofi",
-    "description": "Mini Tank mit LOFI Bluetooth fuer Calliope mini V2",
+    "name": "mini-tank-web",
+    "description": "Mini Tank Webcontrol: Motorsteuerung ueber Bluetooth fuer Calliope mini V2",
     "dependencies": {
         "core": "*",
         "v2": "*",
         "bluetooth": "*"
     },
     "files": [
-        "minitanklofi.ts"
+        "minitankweb.ts"
     ],
     "supportedTargets": [
         "calliopemini"
